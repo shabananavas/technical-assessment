@@ -1,0 +1,238 @@
+<?php
+/**
+ * @file
+ * Code for the Giphy Search module.
+ */
+
+// Define the API token.
+define('GIPHY_SEARCH_API_TOKEN', 'dc6zaTOxFJmzC');
+// Define the Endpoint URL.
+define('GIPHY_SEARCH_ENDPOINT_URL', 'http://api.giphy.com/v1/gifs');
+
+/**
+ * Implements hook_menu().
+ *
+ * @return array
+ */
+function giphy_search_menu() {
+  $items['admin/config/giphy-search'] = array(
+    'title' => 'Giphy Search Settings',
+    'description' => 'Giphy Serach Settings page',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('giphy_search_admin_settings_form'),
+    'access callback' => 'user_access',
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'giphy_search.admin.inc'
+  );
+
+  $items['admin/content/giphy-search'] = array(
+    'title' => 'Search Giphy Images',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('giphy_search_form'),
+    'access arguments' => array('access content'),
+    'type' => MENU_NORMAL_ITEM
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function giphy_search_theme() {
+	$path = drupal_get_path('module', 'giphy_search') . '/theme';
+  return array(
+    'giphy_search_images' => array(
+      'variables' => array(
+        'items' => array()
+      ),
+      'template' => 'giphy-search-images',
+      'path' => $path,
+    ),
+  );
+}
+
+/**
+ * Custom function which displays a search form
+ * for the user to enter a word or phrase and
+ * will search the Giphy service and retrieve
+ * a matching image based on the word they entered.
+ *
+ * @param  array $form
+ * @param  array &$form_state
+ *
+ * @return array
+ */
+function giphy_search_form($form, &$form_state) {
+	$form = array();
+
+  $form['search'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Enter a word or phrase'),
+    '#description' => t('Search all Giphy GIFs for a word or phrase.
+    	 Leave blank to search for a random GIF.'),
+    '#default_value' => ''
+  );
+
+  $form['submit'] = array(
+  	'#type' => 'submit',
+  	'#value' => t('Search')
+  );
+
+  $form['surprise_me'] = array(
+  	'#type' => 'submit',
+  	'#value' => t('Surprise Me!'),
+  	'#name' => 'surprise_me',
+  	'#submit' => array('giphy_search_form_submit')
+  );
+
+  // Output the fetched gif results in the same page.
+  if ($form_state['submitted']) {
+  	$output = $form_state['gifs_output'];
+  	$form['gifs'] = array(
+  		'#type' => 'markup',
+  		'#markup' => $output,
+  	);
+  }
+
+  return $form;
+}
+
+/**
+ * Custom submit function for the giphy_search_form.
+ * The form will query the Giphy service and return
+ * back a matching image based on the word the user entered.
+ *
+ * @param  array $form
+ * @param  array &$form_state
+ */
+function giphy_search_form_submit($form, &$form_state) {
+	// Get the Giphy endpoint url.
+	$request_url = variable_get('giphy_endpoint_url', GIPHY_SEARCH_ENDPOINT_URL);
+
+	// If we have an empty textfield, search for a random phrase.
+	if (empty($form_state['values']['search']) || $form_state['triggering_element']['#id'] == 'edit-surprise-me') {
+		$request_url .= '/random?api_key=' . variable_get('giphy_api_token', GIPHY_SEARCH_API_TOKEN);
+	}
+	// Else, search for the words entered in the search box.
+	else {
+		$request_url .= '/search?q=' . urlencode($form_state['values']['search']) . '&api_key=' . variable_get('giphy_api_token', GIPHY_SEARCH_API_TOKEN);
+	}
+
+	// Now run the fetch service to get the gifs.
+	$results = giphy_search_fetch_gifs($request_url);
+
+	// If we've got data back, theme the gifs and
+	// set the output back into the form_state to
+	// display in the same page.
+	$form_state['gifs_output'] = '';
+	if (!empty($results)) {
+		// If we're displaying multiple images, let's
+		// theme the images.
+		if (is_array($results->data)) {
+			$form_state['gifs_output'] = giphy_search_render_gifs($results->data);
+		}
+		// Else, for a single random image, just ouput the original image.
+		else {
+			$form_state['gifs_output'] = giphy_search_render_random_gif($results->data);
+		}
+	}
+	// Else, output a message stating the fetch was unsuccessfull.
+	else {
+		drupal_set_message(t('The Giphy service is temporarily down. Please check back
+			later.'));
+	}
+
+	// Rebuild the form so we can show
+	// the results.
+	$form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Custom function to fetch gifs from the
+ * Giphy service.
+ *
+ * @param string $request_url
+ *   The Giphy Endpoint url.
+ *
+ * @return stdclass/FALSE
+ *   Returns back the data from the service if the
+ *   fetch was successfull.  Returns FALSE if the
+ *   fetch was unsuccessfull.
+ */
+function giphy_search_fetch_gifs($request_url) {
+	// Now, let's retrieve the results.
+	$headers = array();
+	$options = array(
+	  'method' => 'GET'
+	);
+
+	$response = drupal_http_request($request_url, $options);
+	$data = json_decode($response->data);
+
+	// If the fetch was successfull return the
+	// data.
+	if ($response->code == 200) {
+		return $data;
+	}
+	// Else, return FALSE.
+	else {
+		return FALSE;
+	}
+}
+
+/**
+ * Custom function to process, theme and render the
+ * gif images.
+ *
+ * @param  array $results
+ *   The data returned from the Giphy API.
+ *
+ * @return array $output
+ *   The html for the themed giphy images.
+ */
+function giphy_search_render_gifs($results) {
+	$output = t('<h2>Search Results</h2>');
+	$items = array();
+
+	// Go through all the images and add them to
+	// an array to send to the theme function.
+	foreach ($results as $key => $data) {
+		$items[] = array('url' => $data->images->fixed_width->url);
+	}
+
+	// Now theme the images.
+	$output .= theme('giphy_search_images', array(
+    'items' => $items
+  ));
+
+	return $output;
+}
+
+/**
+ * Custom function to render a single gif image.
+ *
+ * @param  array $results
+ *   The data returned from the Giphy API.
+ *
+ * @return array $output
+ *   The html for the single image.
+ */
+function giphy_search_render_random_gif($results) {
+	$output = t('<h2>Random Gif</h2>');
+	$output .= '<div class="giphy-search-single-image"><img src="' . $results->image_original_url . '"></img></div>';
+
+	return $output;
+}
+
+/**
+ * A preprocess function for our theme('giphy_search_images') which prints all
+ * the giphy images in a table.
+ *
+ * @param  array $variables
+ */
+function template_preprocess_giphy_search_images(&$variables) {
+  // Load our css file.
+  drupal_add_css(drupal_get_path('module', 'giphy_search') . '/css/giphy_search.css');
+}

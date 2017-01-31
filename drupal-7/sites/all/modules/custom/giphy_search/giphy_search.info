@@ -1,0 +1,5 @@
+name = Giphy Search
+description = Contains code for searching, retrieving, and rendering an image from the Giphy API.
+core = 7.x
+version = '7.x-1.0'
+package = Other
